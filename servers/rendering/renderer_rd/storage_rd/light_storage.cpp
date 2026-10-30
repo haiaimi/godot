@@ -2743,7 +2743,9 @@ RD::DataFormat LightStorage::get_shadow_atlas_depth_format(bool p_16_bits) {
 }
 
 uint32_t LightStorage::get_shadow_atlas_depth_usage_bits() {
-	return RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+	// Allow explicit diagnostic snapshots of the compositor's borrowed atlas.
+	// This flag performs no copy or readback during normal rendering.
+	return RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT;
 }
 
 /* DIRECTIONAL SHADOW */

@@ -38,8 +38,16 @@
 
 class RenderSceneDataRD : public RenderSceneData {
 	GDCLASS(RenderSceneDataRD, RenderSceneData);
+	static void _bind_methods();
 
 public:
+	// Borrowed frame resources. Valid only during this viewport's compositor callback.
+	RID compositor_shadow_atlas;
+	uint32_t compositor_directional_light_count = 0;
+	RID compositor_lightmap_feedback;
+	Dictionary get_shadow_map_resources() const;
+	RID get_lightmap_feedback_buffer() const { return compositor_lightmap_feedback; }
+	int get_lightmap_feedback_vt_version() const { return 3; }
 	bool calculate_motion_vectors = false;
 
 	Transform3D cam_transform;

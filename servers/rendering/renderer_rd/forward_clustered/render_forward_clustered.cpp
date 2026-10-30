@@ -494,9 +494,13 @@ void RenderForwardClustered::_render_list_template(RenderingDevice::DrawListID p
 		RID vertex_array_rd;
 		RID index_array_rd;
 		RID pipeline_rd;
-		const uint32_t ubershader_iterations = 2;
+		const uint32_t pipeline_attempts = force_specialized_pipelines ? 1 : 3;
 		bool pipeline_valid = false;
-		while (pipeline_key.ubershader < ubershader_iterations) {
+		for (uint32_t pipeline_attempt = 0; pipeline_attempt < pipeline_attempts; pipeline_attempt++) {
+			// Try the asynchronous specialization, then the ready ubershader.
+			// If that fallback failed to compile, wait for the already submitted
+			// specialization instead of dropping this surface's first draw.
+			pipeline_key.ubershader = pipeline_attempt == 1;
 			// Skeleton and blend shape.
 			RD::VertexFormatID vertex_format = -1;
 			bool pipeline_motion_vectors = pipeline_key.color_pass_flags & SceneShaderForwardClustered::PIPELINE_COLOR_PASS_FLAG_MOTION_VECTORS;
@@ -521,15 +525,14 @@ void RenderForwardClustered::_render_list_template(RenderingDevice::DrawListID p
 
 			if (shader != prev_shader || pipeline_hash != prev_pipeline_hash) {
 				RSE::PipelineSource pipeline_source = pipeline_key.ubershader ? RSE::PIPELINE_SOURCE_DRAW : RSE::PIPELINE_SOURCE_SPECIALIZATION;
-				pipeline_rd = shader->pipeline_hash_map.get_pipeline(pipeline_key, pipeline_hash, pipeline_key.ubershader, pipeline_source);
+				pipeline_rd = shader->pipeline_hash_map.get_pipeline(pipeline_key, pipeline_hash, force_specialized_pipelines || pipeline_key.ubershader || pipeline_attempt == 2, pipeline_source);
+
 
 				if (pipeline_rd.is_valid()) {
 					pipeline_valid = true;
 					prev_shader = shader;
 					prev_pipeline_hash = pipeline_hash;
 					break;
-				} else {
-					pipeline_key.ubershader++;
 				}
 			} else {
 				// The same pipeline is bound already.
@@ -1670,6 +1673,9 @@ void RenderForwardClustered::_pre_opaque_render(RenderDataRD *p_render_data, boo
 	texture_storage->update_decal_buffer(*p_render_data->decals, p_render_data->scene_data->cam_transform);
 
 	p_render_data->directional_light_count = directional_light_count;
+	p_render_data->scene_data->compositor_shadow_atlas = p_render_data->shadow_atlas;
+	p_render_data->scene_data->compositor_directional_light_count = directional_light_count;
+	p_render_data->scene_data->compositor_lightmap_feedback = _get_lightmap_feedback_buffer();
 
 	if (current_cluster_builder) {
 		current_cluster_builder->bake_cluster();
@@ -3762,7 +3768,26 @@ RID RenderForwardClustered::_setup_render_pass_uniform_set(RenderListType p_rend
 		uniforms.push_back(u);
 	}
 
+	{
+		RD::Uniform u;
+		u.binding = 37;
+		u.uniform_type = RD::UNIFORM_TYPE_STORAGE_BUFFER;
+		u.append_id(_get_lightmap_feedback_buffer());
+		uniforms.push_back(u);
+	}
+
 	return UniformSetCacheRD::get_singleton()->get_cache_vec(scene_shader.get_default_shader_rd(is_multiview), RENDER_PASS_UNIFORM_SET, uniforms);
+}
+
+RID RenderForwardClustered::_get_lightmap_feedback_buffer() {
+	if (lightmap_feedback_buffer.is_null()) {
+		// Header size 0 keeps every feedback write disabled until a consumer sets it.
+		Vector<uint8_t> zero;
+		zero.resize_initialized(LIGHTMAP_FEEDBACK_WORDS * 4);
+		lightmap_feedback_buffer = RD::get_singleton()->storage_buffer_create(LIGHTMAP_FEEDBACK_WORDS * 4, zero);
+		RD::get_singleton()->set_resource_name(lightmap_feedback_buffer, "Lightmap Feedback Buffer");
+	}
+	return lightmap_feedback_buffer;
 }
 
 RID RenderForwardClustered::_setup_sdfgi_render_pass_uniform_set(RID p_albedo_texture, RID p_emission_texture, RID p_emission_aniso_texture, RID p_geom_facing_texture, const RendererRD::MaterialStorage::Samplers &p_samplers, uint32_t p_uniform_buffer_index) {
@@ -4655,6 +4680,11 @@ static RD::FramebufferFormatID _get_reflection_probe_depth_framebuffer_format_fo
 }
 
 void RenderForwardClustered::_mesh_compile_pipeline_for_surface(SceneShaderForwardClustered::ShaderData *p_shader, void *p_mesh_surface, bool p_ubershader, bool p_instanced_surface, RSE::PipelineSource p_source, SceneShaderForwardClustered::ShaderData::PipelineKey &r_pipeline_key, Vector<ShaderPipelinePair> *r_pipeline_pairs) {
+	// An exact specialization needs draw-time state; do not precompile a
+	// zero-specialization substitute or the rejected generic driver pipeline.
+	if (force_specialized_pipelines && p_ubershader) {
+		return;
+	}
 	RendererRD::MeshStorage *mesh_storage = RendererRD::MeshStorage::get_singleton();
 	uint64_t input_mask = p_shader->get_vertex_input_mask(r_pipeline_key.version, r_pipeline_key.color_pass_flags, p_ubershader);
 	bool pipeline_motion_vectors = r_pipeline_key.color_pass_flags & SceneShaderForwardClustered::PIPELINE_COLOR_PASS_FLAG_MOTION_VECTORS;
@@ -5101,6 +5131,12 @@ void RenderForwardClustered::_update_shader_quality_settings() {
 }
 
 RenderForwardClustered::RenderForwardClustered() {
+	// Optional driver workaround. Preserve the specialized shader, accepting
+	// first-use compilation stalls instead of an unsupported ubershader.
+	force_specialized_pipelines = GLOBAL_DEF("rendering/shader_compiler/force_specialized_pipelines", false);
+	if (force_specialized_pipelines) {
+		print_line("FORWARD_CLUSTERED_SPECIALIZED_ONLY enabled");
+	}
 	singleton = this;
 
 	/* SCENE SHADER */
@@ -5274,6 +5310,9 @@ RenderForwardClustered::~RenderForwardClustered() {
 #endif
 
 	RD::get_singleton()->free_rid(shadow_sampler);
+	if (lightmap_feedback_buffer.is_valid()) {
+		RD::get_singleton()->free_rid(lightmap_feedback_buffer);
+	}
 	RSG::light_storage->directional_shadow_atlas_set_size(0);
 
 	RD::get_singleton()->free_rid(best_fit_normal.pipeline);

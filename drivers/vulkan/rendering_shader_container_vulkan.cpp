@@ -101,7 +101,13 @@ RenderingDeviceCommons::ShaderLanguageVersion RenderingShaderContainerFormatVulk
 }
 
 RenderingDeviceCommons::ShaderSpirvVersion RenderingShaderContainerFormatVulkan::get_shader_spirv_version() const {
+#ifdef ANDROID_ENABLED
+	// Adreno 740 rejects complex SPIR-V 1.4/1.5 compute modules which the same
+	// driver accepts as 1.3. Keep Android on the Vulkan 1.1 core shader target.
+	return SHADER_SPIRV_VERSION_1_3;
+#else
 	return SHADER_SPIRV_VERSION_1_4;
+#endif
 }
 
 void RenderingShaderContainerFormatVulkan::set_debug_info_enabled(bool p_debug_info_enabled) {

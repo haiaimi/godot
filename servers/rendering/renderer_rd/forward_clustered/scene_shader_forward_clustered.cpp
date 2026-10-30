@@ -85,6 +85,7 @@ void SceneShaderForwardClustered::ShaderData::set_code(const String &p_code) {
 	uses_z_clip_scale = false;
 
 	int depth_drawi = DEPTH_DRAW_OPAQUE;
+	bool writes_fragment_depth = false;
 
 	int stencil_readi = 0;
 	int stencil_writei = 0;
@@ -154,6 +155,7 @@ void SceneShaderForwardClustered::ShaderData::set_code(const String &p_code) {
 	actions.write_flag_pointers["TANGENT"] = &writes_tangent;
 	actions.write_flag_pointers["BINORMAL"] = &writes_tangent;
 	actions.write_flag_pointers["Z_CLIP_SCALE"] = &uses_z_clip_scale;
+	actions.write_flag_pointers["DEPTH"] = &writes_fragment_depth;
 
 	actions.stencil_mode_values["read"] = Pair<int *, int>(&stencil_readi, STENCIL_FLAG_READ);
 	actions.stencil_mode_values["write"] = Pair<int *, int>(&stencil_writei, STENCIL_FLAG_WRITE);
@@ -214,6 +216,29 @@ void SceneShaderForwardClustered::ShaderData::set_code(const String &p_code) {
 	stencil_compare = StencilCompare(stencil_comparei);
 	stencil_reference = stencil_referencei;
 
+	// Resolve alpha routing before deciding whether feedback may force early tests.
+	if (alpha_antialiasing_mode != ALPHA_ANTIALIASING_OFF) {
+		blend_mode = BLEND_MODE_ALPHA_TO_COVERAGE;
+	}
+	uses_blend_alpha = blend_mode_uses_blend_alpha(BlendMode(blend_mode));
+
+	// Storage writes otherwise prevent the driver from assuming early depth tests.
+	// A discarded opaque fragment is safe only with the matching full prepass:
+	// its color pipeline tests EQUAL and never writes depth. Keep shader depth,
+	// alpha-to-coverage, stencil and transparent routing out of this guarantee.
+	bool feedback_full_prepass = GLOBAL_GET_CACHED(bool, "rendering/driver/depth_prepass/enable");
+	bool feedback_early_safe = !writes_fragment_depth && !stencil_enabled && !uses_alpha_pass() && depth_draw == DEPTH_DRAW_OPAQUE &&
+			alpha_antialiasing_mode == ALPHA_ANTIALIASING_OFF && !uses_alpha_antialiasing &&
+			(!(uses_discard || uses_alpha_clip) || feedback_full_prepass);
+	if (feedback_early_safe) {
+		gen_code.defines.push_back("#define LIGHTMAP_FEEDBACK_EARLY_SAFE\n");
+		if (feedback_full_prepass) {
+			// Also safe if instance fade routes this material to transparency:
+			// DEPTH_DRAW_OPAQUE disables depth writes in that pipeline as well.
+			gen_code.defines.push_back("#define LIGHTMAP_FEEDBACK_READ_ONLY_DEPTH\n");
+		}
+	}
+
 #if 0
 	print_line("**compiling shader:");
 	print_line("**defines:\n");
@@ -239,12 +264,6 @@ void SceneShaderForwardClustered::ShaderData::set_code(const String &p_code) {
 
 	pipeline_hash_map.clear_pipelines();
 
-	// If any form of Alpha Antialiasing is enabled, set the blend mode to alpha to coverage.
-	if (alpha_antialiasing_mode != ALPHA_ANTIALIASING_OFF) {
-		blend_mode = BLEND_MODE_ALPHA_TO_COVERAGE;
-	}
-
-	uses_blend_alpha = blend_mode_uses_blend_alpha(BlendMode(blend_mode));
 }
 
 bool SceneShaderForwardClustered::ShaderData::is_animated() const {
@@ -503,6 +522,9 @@ void SceneShaderForwardClustered::ShaderData::_create_pipeline(PipelineKey p_pip
 	ERR_FAIL_COND(shader_rid.is_null());
 
 	RID pipeline = RD::get_singleton()->render_pipeline_create(shader_rid, p_pipeline_key.framebuffer_format_id, p_pipeline_key.vertex_format_id, primitive_rd, raster_state, multisample_state, depth_stencil_state, blend_state, 0, 0, specialization_constants);
+	if (pipeline.is_null()) {
+		print_error(vformat("CAMPAIGN_PIPELINE_FAILURE path=%s version=%d color_flags=%d uber=%d specialization0=%d specialization1=%d", path, int(p_pipeline_key.version), int(p_pipeline_key.color_pass_flags), int(p_pipeline_key.ubershader), int(p_pipeline_key.shader_specialization.packed_0), int(p_pipeline_key.shader_specialization.packed_1)));
+	}
 	ERR_FAIL_COND(pipeline.is_null());
 
 	pipeline_hash_map.add_compiled_pipeline(p_pipeline_key.hash(), pipeline);
@@ -765,6 +787,8 @@ void SceneShaderForwardClustered::init(const String p_defines) {
 		actions.renames["SSS_TRANSMITTANCE_DEPTH"] = "transmittance_depth";
 		actions.renames["SSS_TRANSMITTANCE_BOOST"] = "transmittance_boost";
 		actions.renames["BACKLIGHT"] = "backlight";
+		actions.renames["LIGHTMAP_FEEDBACK_UV"] = "lightmap_feedback_uv";
+		actions.renames["LIGHTMAP_FEEDBACK_MESH"] = "lightmap_feedback_mesh";
 		actions.renames["AO"] = "ao";
 		actions.renames["AO_LIGHT_AFFECT"] = "ao_light_affect";
 		actions.renames["EMISSION"] = "emission";
@@ -848,6 +872,8 @@ void SceneShaderForwardClustered::init(const String p_defines) {
 		actions.usage_defines["SSS_STRENGTH"] = "#define ENABLE_SSS\n";
 		actions.usage_defines["SSS_TRANSMITTANCE_DEPTH"] = "#define ENABLE_TRANSMITTANCE\n";
 		actions.usage_defines["BACKLIGHT"] = "#define LIGHT_BACKLIGHT_USED\n";
+		actions.usage_defines["LIGHTMAP_FEEDBACK_UV"] = "#define LIGHTMAP_FEEDBACK_USED\n";
+		actions.usage_defines["LIGHTMAP_FEEDBACK_MESH"] = "#define LIGHTMAP_FEEDBACK_USED\n";
 		actions.usage_defines["SCREEN_UV"] = "#define SCREEN_UV_USED\n";
 
 		actions.usage_defines["FOG"] = "#define CUSTOM_FOG_USED\n";

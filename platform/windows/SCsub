@@ -4,6 +4,7 @@ from misc.utility.scons_hints import *
 Import("env")
 
 import os
+from SCons.Script import ARGUMENTS
 from pathlib import Path
 
 import platform_windows_builders
@@ -116,7 +117,8 @@ if env["library_type"] == "static_library":
 elif env["library_type"] == "shared_library":
     prog = env.add_shared_library("#bin/godot", sources, PROGSUFFIX=env["PROGSUFFIX"])
 else:
-    prog = env.add_program("#bin/godot", sources, PROGSUFFIX=env["PROGSUFFIX"])
+    binary_base = "#bin/godot_gi_age16" if ARGUMENTS.get("gi_age16_binary") == "1" else ("#bin/godot_gi_age" if ARGUMENTS.get("gi_age_binary") == "1" else ("#bin/godot_gi_vt" if ARGUMENTS.get("gi_vt_binary") == "1" else ("#bin/godot_gi_shadowmap" if ARGUMENTS.get("gi_shadowmap_binary") == "1" else "#bin/godot")))
+    prog = env.add_program(binary_base, sources, PROGSUFFIX=env["PROGSUFFIX"])
 arrange_program_clean(prog)
 
 env.Depends(prog, "godot.manifest")
@@ -141,7 +143,7 @@ if env["windows_subsystem"] == "gui":
         env_wrap.Append(LINKFLAGS=["-Wl,--subsystem,console"])
         env_wrap.Append(LIBS=["version"])
 
-    prog_wrap = env_wrap.add_program("#bin/godot", common_win_wrap + res_wrap_obj, PROGSUFFIX=env["PROGSUFFIX_WRAP"])
+    prog_wrap = env_wrap.add_program(binary_base, common_win_wrap + res_wrap_obj, PROGSUFFIX=env["PROGSUFFIX_WRAP"])
     arrange_program_clean(prog_wrap)
     env_wrap.Depends(prog_wrap, prog)
     sources += common_win_wrap + res_wrap_obj

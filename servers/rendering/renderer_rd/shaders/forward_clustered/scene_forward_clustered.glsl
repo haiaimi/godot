@@ -918,6 +918,146 @@ layout(location = 9) in float dp_clip;
 
 layout(location = 10) in flat uint instance_index_interp;
 
+// Visible lightmap texel feedback. Declared in every variant so the render pass
+// set layout matches; written only by materials that output LIGHTMAP_FEEDBACK_UV.
+// data[0..1] atlas size (0 disables), [2] block list offset, [3] texel bits offset,
+// [4..6] indirect dispatch (unique 8x8 block count, 1, 1), [8..] block bits.
+layout(set = 1, binding = 37, std430) buffer LightmapFeedback {
+	uint data[];
+}
+lightmap_feedback;
+
+#if defined(LIGHTMAP_FEEDBACK_USED) && !defined(MODE_RENDER_DEPTH)
+// Side effects must not run for fragments the depth prepass already rejected.
+#if defined(LIGHTMAP_FEEDBACK_EARLY_SAFE) && !defined(USE_SHADOW_TO_OPACITY) && (!defined(UBERSHADER) || defined(LIGHTMAP_FEEDBACK_READ_ONLY_DEPTH))
+// Ubershaders emulate culling with discard, so require read-only depth there.
+layout(early_fragment_tests) in;
+#endif
+
+// VTB1: header16, visible mesh bits, immutable mesh block rectangles, request
+// pair bits. Optional diagnostic queue insertion is owned by the first bit
+// writer; production does not append or count. Screen 8x8 tiles cycle in 64 frames.
+// Mesh visibility is independent so sub-tile objects still age.
+void lightmap_feedback_vt(vec2 uv, uint mesh, uvec2 size) {
+	uint capacity_words = uint(lightmap_feedback.data.length());
+	if (mesh >= lightmap_feedback.data[9]) {
+		return;
+	}
+	// Persistent per-instance/block ages. Color PS only requests age zero;
+	// compute owns aging and queue construction between color passes.
+	if ((lightmap_feedback.data[14] & 2u) != 0u) {
+		uint shift = (lightmap_feedback.data[14] & 4u) != 0u ? 4u : 5u;
+		uint mask = (1u << shift) - 1u;
+		uint phase = lightmap_feedback.data[6] & ((1u << (shift * 2u)) - 1u);
+		if (any(notEqual(uvec2(gl_FragCoord.xy) & uvec2(mask), uvec2(phase & mask, phase >> shift)))) {
+			return;
+		}
+		uint r = lightmap_feedback.data[10] + mesh * 4u;
+		uvec4 rect = uvec4(lightmap_feedback.data[r], lightmap_feedback.data[r + 1u], lightmap_feedback.data[r + 2u], lightmap_feedback.data[r + 3u]);
+		uint nx = (size.x + 7u) >> 3u;
+		uvec2 origin = uvec2(rect.y % nx, rect.y / nx);
+		ivec2 base = ivec2(floor(uv * vec2(size) - 0.5));
+		uvec4 seen = uvec4(0xffffffffu);
+		uint count = 0u;
+		for (int y = 0; y < 2; y++) {
+			for (int x = 0; x < 2; x++) {
+				uvec2 block = uvec2(clamp(base + ivec2(x, y), ivec2(0), ivec2(size) - 1)) >> 3u;
+				uvec2 local = block - origin;
+				if (any(lessThan(block, origin)) || any(greaterThanEqual(local, rect.zw))) {
+					continue;
+				}
+				uint pair = rect.x + local.y * rect.z + local.x;
+				if (pair >= lightmap_feedback.data[12] || any(equal(seen, uvec4(pair)))) {
+					continue;
+				}
+				seen[count++] = pair;
+				uint address = lightmap_feedback.data[15] + pair;
+				if (address < capacity_words) {
+					// Atomic even for identical values: fragments/views may share a block.
+					atomicExchange(lightmap_feedback.data[address], 0u);
+				}
+			}
+		}
+		return;
+	}
+	uint mesh_word = lightmap_feedback.data[8] + (mesh >> 5u);
+	uint mesh_bit = 1u << (mesh & 31u);
+	if (mesh_word >= capacity_words) {
+		return;
+	}
+	if ((lightmap_feedback.data[mesh_word] & mesh_bit) == 0u) {
+		atomicOr(lightmap_feedback.data[mesh_word], mesh_bit);
+	}
+	uint phase = lightmap_feedback.data[6] & 63u;
+	if (any(notEqual(uvec2(gl_FragCoord.xy) & uvec2(7u), uvec2(phase & 7u, phase >> 3u)))) {
+		return;
+	}
+	ivec2 base = ivec2(floor(uv * vec2(size) - 0.5));
+	ivec2 last = ivec2(size) - 1;
+	uint mesh_rect = lightmap_feedback.data[10] + mesh * 4u;
+	if (mesh_rect + 3u >= capacity_words) {
+		return;
+	}
+	uvec4 rect = uvec4(lightmap_feedback.data[mesh_rect], lightmap_feedback.data[mesh_rect + 1u], lightmap_feedback.data[mesh_rect + 2u], lightmap_feedback.data[mesh_rect + 3u]);
+	uint blocks_x = (size.x + 7u) >> 3u;
+	uvec2 origin = uvec2(rect.y % blocks_x, rect.y / blocks_x);
+	uvec4 seen = uvec4(0xffffffffu);
+	uint seen_count = 0u;
+	uint first = lightmap_feedback.data[2];
+	uint capacity = first <= capacity_words ? min(lightmap_feedback.data[3], capacity_words - first) : 0u;
+	for (int y = 0; y < 2; y++) {
+		for (int x = 0; x < 2; x++) {
+			uvec2 texel = uvec2(clamp(base + ivec2(x, y), ivec2(0), last));
+			uvec2 block = texel >> 3u;
+			if (any(lessThan(block, origin)) || any(greaterThanEqual(block - origin, rect.zw))) {
+				continue;
+			}
+			uvec2 local_block = block - origin;
+			uint pair = rect.x + local_block.y * rect.z + local_block.x;
+			if (pair >= lightmap_feedback.data[12] || any(equal(seen, uvec4(pair)))) {
+				continue;
+			}
+			seen[seen_count++] = pair;
+			uint pair_word = lightmap_feedback.data[11] + (pair >> 5u);
+			uint pair_bit = 1u << (pair & 31u);
+			if (pair_word >= capacity_words || (lightmap_feedback.data[pair_word] & pair_bit) != 0u || (atomicOr(lightmap_feedback.data[pair_word], pair_bit) & pair_bit) != 0u) {
+				continue;
+			}
+			if ((lightmap_feedback.data[14] & 1u) == 0u) {
+				continue;
+			}
+			uint at = atomicAdd(lightmap_feedback.data[4], 1u);
+			if (at < capacity) {
+				lightmap_feedback.data[first + at] = pair;
+			} else {
+				atomicAdd(lightmap_feedback.data[5], 1u);
+			}
+		}
+	}
+}
+
+// The fragment that first sets a texel bit owns it; the one that first sets its
+// block bit appends the block. Lists are therefore unique without another pass.
+void lightmap_feedback_mark(uvec2 texel, uvec2 size) {
+	uint index = texel.y * size.x + texel.x;
+	uint word = lightmap_feedback.data[3] + (index >> 5u);
+	uint bit = 1u << (index & 31u);
+	if (word >= uint(lightmap_feedback.data.length()) || (lightmap_feedback.data[word] & bit) != 0u) {
+		return;
+	}
+	if ((atomicOr(lightmap_feedback.data[word], bit) & bit) != 0u) {
+		return;
+	}
+	uint block = (texel.y >> 3u) * ((size.x + 7u) >> 3u) + (texel.x >> 3u);
+	uint block_word = 8u + (block >> 5u);
+	uint block_bit = 1u << (block & 31u);
+	if ((lightmap_feedback.data[block_word] & block_bit) != 0u || (atomicOr(lightmap_feedback.data[block_word], block_bit) & block_bit) != 0u) {
+		return;
+	}
+	lightmap_feedback.data[lightmap_feedback.data[2] + atomicAdd(lightmap_feedback.data[4], 1u)] = block;
+}
+#endif
+
 #ifdef USE_LIGHTMAP
 // w0, w1, w2, and w3 are the four cubic B-spline basis functions
 float w0(float a) {
@@ -1347,9 +1487,15 @@ void fragment_shader(in SceneData scene_data) {
 #endif
 #endif
 
+#ifdef LIGHTMAP_FEEDBACK_USED
+	vec2 lightmap_feedback_uv = vec2(-1.0);
+	uint lightmap_feedback_mesh = 0xffffffffu;
+#endif
+
 	{
 #CODE : FRAGMENT
 	}
+
 
 	float roughness = roughness_highp;
 	float metallic = metallic_highp;
@@ -1432,6 +1578,7 @@ void fragment_shader(in SceneData scene_data) {
 #endif // MODE_RENDER_DEPTH
 
 #endif // !USE_SHADOW_TO_OPACITY
+
 
 #if defined(NORMAL_MAP_USED)
 	normal_map.xy = normal_map.xy * 2.0 - 1.0;
@@ -3102,6 +3249,28 @@ void fragment_shader(in SceneData scene_data) {
 #endif //MODE_SEPARATE_SPECULAR
 
 #endif //MODE_RENDER_DEPTH
+
+	// Finalize feedback only after all custom and built-in color-pass clipping.
+#if defined(LIGHTMAP_FEEDBACK_USED) && !defined(MODE_RENDER_DEPTH)
+	{
+		uvec2 feedback_size = uvec2(lightmap_feedback.data[0], lightmap_feedback.data[1]);
+		if (all(greaterThan(feedback_size, uvec2(0u))) && all(greaterThanEqual(lightmap_feedback_uv, vec2(0.0))) && all(lessThan(lightmap_feedback_uv, vec2(1.0)))) {
+			if (lightmap_feedback.data[7] == 0x56544231u) {
+				lightmap_feedback_vt(lightmap_feedback_uv, lightmap_feedback_mesh, feedback_size);
+			} else {
+				// All four texels of the bilinear lightmap footprint are needed.
+				ivec2 feedback_base = ivec2(floor(lightmap_feedback_uv * vec2(feedback_size) - 0.5));
+				ivec2 feedback_last = ivec2(feedback_size) - 1;
+				for (int feedback_y = 0; feedback_y < 2; feedback_y++) {
+					for (int feedback_x = 0; feedback_x < 2; feedback_x++) {
+						lightmap_feedback_mark(uvec2(clamp(feedback_base + ivec2(feedback_x, feedback_y), ivec2(0), feedback_last)), feedback_size);
+					}
+				}
+			}
+		}
+	}
+#endif
+
 #ifdef MOTION_VECTORS
 	vec2 position_clip = (screen_position.xy / screen_position.w) - scene_data.taa_jitter;
 	vec2 prev_position_clip = (prev_screen_position.xy / prev_screen_position.w) - scene_data_block.prev_data.taa_jitter;

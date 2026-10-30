@@ -29,11 +29,33 @@
 /**************************************************************************/
 
 #include "render_scene_data_rd.h"
+#include "core/object/class_db.h"
 
 #include "servers/rendering/renderer_rd/renderer_scene_render_rd.h"
 #include "servers/rendering/renderer_rd/storage_rd/light_storage.h"
 #include "servers/rendering/renderer_rd/storage_rd/texture_storage.h"
 #include "servers/rendering/rendering_server_globals.h"
+
+void RenderSceneDataRD::_bind_methods() {
+	ClassDB::bind_method(D_METHOD("get_shadow_map_resources"), &RenderSceneDataRD::get_shadow_map_resources);
+	ClassDB::bind_method(D_METHOD("get_lightmap_feedback_buffer"), &RenderSceneDataRD::get_lightmap_feedback_buffer);
+	ClassDB::bind_method(D_METHOD("get_lightmap_feedback_vt_version"), &RenderSceneDataRD::get_lightmap_feedback_vt_version);
+}
+
+Dictionary RenderSceneDataRD::get_shadow_map_resources() const {
+	RendererRD::LightStorage *lights = RendererRD::LightStorage::get_singleton();
+	RendererRD::TextureStorage *textures = RendererRD::TextureStorage::get_singleton();
+	RID atlas = compositor_shadow_atlas.is_valid() ? lights->shadow_atlas_get_texture(compositor_shadow_atlas) : RID();
+	RID directional = lights->directional_shadow_get_texture();
+	Dictionary result;
+	result["spot_texture"] = atlas.is_valid() ? atlas : textures->texture_rd_get_default(RendererRD::TextureStorage::DEFAULT_RD_TEXTURE_DEPTH);
+	result["directional_texture"] = directional.is_valid() ? directional : textures->texture_rd_get_default(RendererRD::TextureStorage::DEFAULT_RD_TEXTURE_DEPTH);
+	result["spot_buffer"] = lights->get_spot_light_buffer();
+	result["directional_buffer"] = lights->get_directional_light_buffer();
+	result["spot_count"] = lights->get_spot_light_count();
+	result["directional_count"] = compositor_directional_light_count;
+	return result;
+}
 
 Transform3D RenderSceneDataRD::get_cam_transform() const {
 	return cam_transform;
