@@ -72,6 +72,25 @@ bool ResourceImporterShaderFile::get_option_visibility(const String &p_path, con
 	return true;
 }
 
+static String _expand_local_include(const String &p_path, int p_depth = 0) {
+	ERR_FAIL_COND_V_MSG(p_depth >= 64, String(), "Shader include nesting exceeds 64 levels.");
+	Ref<FileAccess> file = FileAccess::open(p_path, FileAccess::READ);
+	ERR_FAIL_COND_V(file.is_null(), String());
+	String result;
+	for (const String &line : file->get_as_utf8_string().split("\n")) {
+		String directive = line.strip_edges();
+		if (directive.begins_with("#include \"")) {
+			String path = directive.get_slicec('"', 1);
+			String nested = _expand_local_include(path.is_relative_path() ? p_path.get_base_dir().path_join(path) : path, p_depth + 1);
+			ERR_FAIL_COND_V(nested.is_empty(), String());
+			result += nested + "\n";
+		} else {
+			result += line + "\n";
+		}
+	}
+	return result;
+}
+
 static String _include_function(const String &p_path, void *userpointer) {
 	Error err;
 
@@ -86,7 +105,7 @@ static String _include_function(const String &p_path, void *userpointer) {
 	if (err != OK) {
 		return String();
 	}
-	return file_inc->get_as_utf8_string();
+	return _expand_local_include(include);
 }
 
 Error ResourceImporterShaderFile::import(ResourceUID::ID p_source_id, const String &p_source_file, const String &p_save_path, const HashMap<StringName, Variant> &p_options, List<String> *r_platform_variants, List<String> *r_gen_files, Variant *r_metadata) {

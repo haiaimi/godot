@@ -922,6 +922,9 @@ layout(location = 10) in flat uint instance_index_interp;
 // set layout matches; written only by materials that output LIGHTMAP_FEEDBACK_UV.
 // data[0..1] atlas size (0 disables), [2] block list offset, [3] texel bits offset,
 // [4..6] indirect dispatch (unique 8x8 block count, 1, 1), [8..] block bits.
+// Keep in sync with RenderForwardClustered::LIGHTMAP_FEEDBACK_WORDS.
+// Metal does not bind SPIRV-Cross's runtime buffer-size table for SSBO length().
+#define LIGHTMAP_FEEDBACK_WORDS (4u + 65536u)
 layout(set = 1, binding = 37, std430) buffer LightmapFeedback {
 	uint data[];
 }
@@ -939,7 +942,7 @@ layout(early_fragment_tests) in;
 // writer; production does not append or count. Screen 8x8 tiles cycle in 64 frames.
 // Mesh visibility is independent so sub-tile objects still age.
 void lightmap_feedback_vt(vec2 uv, uint mesh, uvec2 size) {
-	uint capacity_words = uint(lightmap_feedback.data.length());
+	uint capacity_words = LIGHTMAP_FEEDBACK_WORDS;
 	if (mesh >= lightmap_feedback.data[9]) {
 		return;
 	}
@@ -1042,7 +1045,7 @@ void lightmap_feedback_mark(uvec2 texel, uvec2 size) {
 	uint index = texel.y * size.x + texel.x;
 	uint word = lightmap_feedback.data[3] + (index >> 5u);
 	uint bit = 1u << (index & 31u);
-	if (word >= uint(lightmap_feedback.data.length()) || (lightmap_feedback.data[word] & bit) != 0u) {
+	if (word >= LIGHTMAP_FEEDBACK_WORDS || (lightmap_feedback.data[word] & bit) != 0u) {
 		return;
 	}
 	if ((atomicOr(lightmap_feedback.data[word], bit) & bit) != 0u) {
