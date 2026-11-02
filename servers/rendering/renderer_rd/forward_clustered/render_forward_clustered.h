@@ -767,6 +767,9 @@ private:
 	static const uint32_t LIGHTMAP_FEEDBACK_WORDS = 4 + 65536;
 	RID lightmap_feedback_buffer;
 	RID _get_lightmap_feedback_buffer();
+	static const uint32_t VOXEL_FEEDBACK_WORDS = 4 + 65536;
+	RID voxel_feedback_buffer;
+	RID _get_voxel_feedback_buffer();
 
 	void _update_volumetric_fog(Ref<RenderSceneBuffersRD> p_render_buffers, RID p_environment, const Projection &p_cam_projection, const Transform3D &p_cam_transform, const Transform3D &p_prev_cam_inv_transform, RID p_shadow_atlas, int p_directional_light_count, bool p_use_directional_shadows, int p_positional_light_count, int p_voxel_gi_count, const PagedArray<RID> &p_fog_volumes);
 

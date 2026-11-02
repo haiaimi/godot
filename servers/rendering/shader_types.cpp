@@ -168,6 +168,8 @@ ShaderTypes::ShaderTypes() {
 	// Visible-texel feedback (Forward+ color pass only). Negative means no texel.
 	shader_modes[RSE::SHADER_SPATIAL].functions["fragment"].built_ins["LIGHTMAP_FEEDBACK_UV"] = ShaderLanguage::TYPE_VEC2;
 	shader_modes[RSE::SHADER_SPATIAL].functions["fragment"].built_ins["LIGHTMAP_FEEDBACK_MESH"] = ShaderLanguage::TYPE_UINT;
+	shader_modes[RSE::SHADER_SPATIAL].functions["fragment"].built_ins["VOXEL_FEEDBACK_POSITION"] = ShaderLanguage::TYPE_VEC3;
+	shader_modes[RSE::SHADER_SPATIAL].functions["fragment"].built_ins["IN_COLOR_PASS"] = constt(ShaderLanguage::TYPE_BOOL);
 	shader_modes[RSE::SHADER_SPATIAL].functions["fragment"].built_ins["AO"] = ShaderLanguage::TYPE_FLOAT;
 	shader_modes[RSE::SHADER_SPATIAL].functions["fragment"].built_ins["AO_LIGHT_AFFECT"] = ShaderLanguage::TYPE_FLOAT;
 	shader_modes[RSE::SHADER_SPATIAL].functions["fragment"].built_ins["EMISSION"] = ShaderLanguage::TYPE_VEC3;

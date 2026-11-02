@@ -930,7 +930,18 @@ layout(set = 1, binding = 37, std430) buffer LightmapFeedback {
 }
 lightmap_feedback;
 
-#if defined(LIGHTMAP_FEEDBACK_USED) && !defined(MODE_RENDER_DEPTH)
+// Separate opt-in Voxel feedback, with the same 16-word / per-brick layout as
+// the compute consumer. Header: active at 1, brick count at 2, minimum/cell at
+// 4..7, logical voxel dimensions at 8..10, brick dimensions at 11..13.
+#ifdef MODE_RENDER_DEPTH
+#define MATERIAL_COLOR_PASS false
+#else
+#define MATERIAL_COLOR_PASS true
+#endif
+#define VOXEL_FEEDBACK_WORDS (4u + 65536u)
+layout(set = 1, binding = 38, std430) buffer VoxelColorFeedback { uint data[]; } voxel_color_feedback;
+
+#if (defined(LIGHTMAP_FEEDBACK_USED) || defined(VOXEL_FEEDBACK_USED)) && !defined(MODE_RENDER_DEPTH)
 // Side effects must not run for fragments the depth prepass already rejected.
 #if defined(LIGHTMAP_FEEDBACK_EARLY_SAFE) && !defined(USE_SHADOW_TO_OPACITY) && (!defined(UBERSHADER) || defined(LIGHTMAP_FEEDBACK_READ_ONLY_DEPTH))
 // Ubershaders emulate culling with discard, so require read-only depth there.
@@ -1058,6 +1069,35 @@ void lightmap_feedback_mark(uvec2 texel, uvec2 size) {
 		return;
 	}
 	lightmap_feedback.data[lightmap_feedback.data[2] + atomicAdd(lightmap_feedback.data[4], 1u)] = block;
+}
+#endif
+
+#if defined(VOXEL_FEEDBACK_USED) && !defined(MODE_RENDER_DEPTH)
+void voxel_feedback_mark(vec3 position) {
+	if (position.x == 1e30 || (voxel_color_feedback.data[1] & 1u) == 0u) {
+		return;
+	}
+	vec3 minimum = uintBitsToFloat(uvec3(voxel_color_feedback.data[4], voxel_color_feedback.data[5], voxel_color_feedback.data[6]));
+	float cell = uintBitsToFloat(voxel_color_feedback.data[7]);
+	ivec3 dimensions = ivec3(voxel_color_feedback.data[8], voxel_color_feedback.data[9], voxel_color_feedback.data[10]);
+	ivec3 q = ivec3(floor((position - minimum) / cell));
+	if (any(lessThan(q, ivec3(-1))) || any(greaterThan(q, dimensions))) {
+		return;
+	}
+	q = clamp(q, ivec3(0), dimensions - 1);
+	uvec3 b = uvec3(q) / 4u, local = uvec3(q) & 3u;
+	uint brick = b.x + voxel_color_feedback.data[11] * (b.y + voxel_color_feedback.data[12] * b.z);
+	uint bit = local.x + 4u * local.y + 16u * local.z;
+	uint word = 16u + brick * 2u + (bit >> 5u), mask = 1u << (bit & 31u);
+	// Monotonic within this color pass: a stale pretest can only add an atomic.
+	if ((voxel_color_feedback.data[word] & mask) != 0u || (atomicOr(voxel_color_feedback.data[word], mask) & mask) != 0u) {
+		return;
+	}
+	uint count = voxel_color_feedback.data[2];
+	if (atomicOr(voxel_color_feedback.data[16u + count * 2u + brick], 1u) == 0u) {
+		uint at = atomicAdd(voxel_color_feedback.data[0], 1u);
+		voxel_color_feedback.data[16u + count * 3u + at] = brick;
+	}
 }
 #endif
 
@@ -1490,6 +1530,9 @@ void fragment_shader(in SceneData scene_data) {
 #endif
 #endif
 
+#ifdef VOXEL_FEEDBACK_USED
+	vec3 voxel_feedback_position = vec3(1e30);
+#endif
 #ifdef LIGHTMAP_FEEDBACK_USED
 	vec2 lightmap_feedback_uv = vec2(-1.0);
 	uint lightmap_feedback_mesh = 0xffffffffu;
@@ -3254,6 +3297,9 @@ void fragment_shader(in SceneData scene_data) {
 #endif //MODE_RENDER_DEPTH
 
 	// Finalize feedback only after all custom and built-in color-pass clipping.
+#if defined(VOXEL_FEEDBACK_USED) && !defined(MODE_RENDER_DEPTH)
+	voxel_feedback_mark(voxel_feedback_position);
+#endif
 #if defined(LIGHTMAP_FEEDBACK_USED) && !defined(MODE_RENDER_DEPTH)
 	{
 		uvec2 feedback_size = uvec2(lightmap_feedback.data[0], lightmap_feedback.data[1]);

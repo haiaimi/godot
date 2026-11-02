@@ -39,6 +39,9 @@
 void RenderSceneDataRD::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_shadow_map_resources"), &RenderSceneDataRD::get_shadow_map_resources);
 	ClassDB::bind_method(D_METHOD("get_lightmap_feedback_buffer"), &RenderSceneDataRD::get_lightmap_feedback_buffer);
+	ClassDB::bind_method(D_METHOD("get_voxel_feedback_buffer"), &RenderSceneDataRD::get_voxel_feedback_buffer);
+	ClassDB::bind_method(D_METHOD("get_voxel_feedback_version"), &RenderSceneDataRD::get_voxel_feedback_version);
+	ClassDB::bind_method(D_METHOD("get_voxel_material_pass_version"), &RenderSceneDataRD::get_voxel_material_pass_version);
 	ClassDB::bind_method(D_METHOD("get_lightmap_feedback_vt_version"), &RenderSceneDataRD::get_lightmap_feedback_vt_version);
 }
 

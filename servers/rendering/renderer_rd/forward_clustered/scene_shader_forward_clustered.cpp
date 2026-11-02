@@ -789,6 +789,8 @@ void SceneShaderForwardClustered::init(const String p_defines) {
 		actions.renames["BACKLIGHT"] = "backlight";
 		actions.renames["LIGHTMAP_FEEDBACK_UV"] = "lightmap_feedback_uv";
 		actions.renames["LIGHTMAP_FEEDBACK_MESH"] = "lightmap_feedback_mesh";
+		actions.renames["VOXEL_FEEDBACK_POSITION"] = "voxel_feedback_position";
+		actions.renames["IN_COLOR_PASS"] = "MATERIAL_COLOR_PASS";
 		actions.renames["AO"] = "ao";
 		actions.renames["AO_LIGHT_AFFECT"] = "ao_light_affect";
 		actions.renames["EMISSION"] = "emission";
@@ -874,6 +876,7 @@ void SceneShaderForwardClustered::init(const String p_defines) {
 		actions.usage_defines["BACKLIGHT"] = "#define LIGHT_BACKLIGHT_USED\n";
 		actions.usage_defines["LIGHTMAP_FEEDBACK_UV"] = "#define LIGHTMAP_FEEDBACK_USED\n";
 		actions.usage_defines["LIGHTMAP_FEEDBACK_MESH"] = "#define LIGHTMAP_FEEDBACK_USED\n";
+		actions.usage_defines["VOXEL_FEEDBACK_POSITION"] = "#define VOXEL_FEEDBACK_USED\n";
 		actions.usage_defines["SCREEN_UV"] = "#define SCREEN_UV_USED\n";
 
 		actions.usage_defines["FOG"] = "#define CUSTOM_FOG_USED\n";

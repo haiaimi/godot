@@ -45,6 +45,10 @@ public:
 	RID compositor_shadow_atlas;
 	uint32_t compositor_directional_light_count = 0;
 	RID compositor_lightmap_feedback;
+	RID compositor_voxel_feedback;
+	RID get_voxel_feedback_buffer() const { return compositor_voxel_feedback; }
+	int get_voxel_feedback_version() const { return 1; }
+	int get_voxel_material_pass_version() const { return 1; }
 	Dictionary get_shadow_map_resources() const;
 	RID get_lightmap_feedback_buffer() const { return compositor_lightmap_feedback; }
 	int get_lightmap_feedback_vt_version() const { return 3; }

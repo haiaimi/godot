@@ -1676,6 +1676,7 @@ void RenderForwardClustered::_pre_opaque_render(RenderDataRD *p_render_data, boo
 	p_render_data->scene_data->compositor_shadow_atlas = p_render_data->shadow_atlas;
 	p_render_data->scene_data->compositor_directional_light_count = directional_light_count;
 	p_render_data->scene_data->compositor_lightmap_feedback = _get_lightmap_feedback_buffer();
+	p_render_data->scene_data->compositor_voxel_feedback = _get_voxel_feedback_buffer();
 
 	if (current_cluster_builder) {
 		current_cluster_builder->bake_cluster();
@@ -2178,6 +2179,7 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 		}
 
 		RENDER_TIMESTAMP("Process Pre Opaque Compositor Effects");
+		p_render_data->scene_data->compositor_voxel_feedback = _get_voxel_feedback_buffer();
 		_process_compositor_effects(RSE::COMPOSITOR_EFFECT_CALLBACK_TYPE_PRE_OPAQUE, p_render_data);
 	}
 
@@ -3775,8 +3777,25 @@ RID RenderForwardClustered::_setup_render_pass_uniform_set(RenderListType p_rend
 		u.append_id(_get_lightmap_feedback_buffer());
 		uniforms.push_back(u);
 	}
+	{
+		RD::Uniform u;
+		u.binding = 38;
+		u.uniform_type = RD::UNIFORM_TYPE_STORAGE_BUFFER;
+		u.append_id(_get_voxel_feedback_buffer());
+		uniforms.push_back(u);
+	}
 
 	return UniformSetCacheRD::get_singleton()->get_cache_vec(scene_shader.get_default_shader_rd(is_multiview), RENDER_PASS_UNIFORM_SET, uniforms);
+}
+
+RID RenderForwardClustered::_get_voxel_feedback_buffer() {
+	if (voxel_feedback_buffer.is_null()) {
+		Vector<uint8_t> zero;
+		zero.resize_initialized(VOXEL_FEEDBACK_WORDS * 4);
+		voxel_feedback_buffer = RD::get_singleton()->storage_buffer_create(VOXEL_FEEDBACK_WORDS * 4, zero);
+		RD::get_singleton()->set_resource_name(voxel_feedback_buffer, "Voxel Color Feedback Buffer");
+	}
+	return voxel_feedback_buffer;
 }
 
 RID RenderForwardClustered::_get_lightmap_feedback_buffer() {
@@ -5312,6 +5331,9 @@ RenderForwardClustered::~RenderForwardClustered() {
 	RD::get_singleton()->free_rid(shadow_sampler);
 	if (lightmap_feedback_buffer.is_valid()) {
 		RD::get_singleton()->free_rid(lightmap_feedback_buffer);
+	}
+	if (voxel_feedback_buffer.is_valid()) {
+		RD::get_singleton()->free_rid(voxel_feedback_buffer);
 	}
 	RSG::light_storage->directional_shadow_atlas_set_size(0);
 
